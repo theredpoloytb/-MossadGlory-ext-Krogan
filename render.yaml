@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: mossadglory-ext-krogan
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: GUILD_ID
+        sync: false
+      - key: CHANNEL_LIVE
+        sync: false
+      - key: CHANNEL_LOGS
+        sync: false
+      - key: CHANNEL_ALERTS
+        sync: false
+      - key: ADMIN_ROLES
+        sync: false
+      - key: ROLE_ALERT_ACTION
+        sync: false
+      - key: ROLE_ALERT_INFILTRATION
+        sync: false
+      - key: ROLE_ALERT_MISSILE
+        sync: false
+      - key: NG_SERVER
+        value: lime
+      - key: SCAN_INTERVAL
+        value: "30"
+      - key: THRESHOLD_ACTION
+        value: "2"
+      - key: THRESHOLD_INFILTRATION
+        value: "3"
+      - key: THRESHOLD_MISSILE
+        value: "5"
+      - key: ALERT_COOLDOWN
+        value: "300"
