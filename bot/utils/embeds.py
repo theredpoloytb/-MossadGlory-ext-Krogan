@@ -28,10 +28,10 @@ def _ts() -> str:
 
 # ─── Live watchlist ───────────────────────────────────────────────────────────
 
-def embed_live(players: list[dict[str, Any]], actions_total: int) -> discord.Embed:
+def embed_live(players: list[dict[str, Any]], nb_active: int) -> discord.Embed:
     """
     Embed principal du salon live.
-    Affiche connectés / déconnectés / OUT avec actions possibles.
+    Affiche connectés / déconnectés / OUT.
     """
     online  = [p for p in players if p["online"] and not p["out_until"]]
     offline = [p for p in players if not p["online"] and not p["out_until"]]
@@ -46,10 +46,7 @@ def embed_live(players: list[dict[str, Any]], actions_total: int) -> discord.Emb
 
     # ── Connectés ──
     if online:
-        lines = [
-            f"🟢 **{p['pseudo']}** — `{p['actions']} actions`"
-            for p in online
-        ]
+        lines = [f"🟢 **{p['pseudo']}**" for p in online]
         embed.add_field(name=f"Connectés ({len(online)})", value="\n".join(lines), inline=False)
     else:
         embed.add_field(name="Connectés (0)", value="*Aucun*", inline=False)
@@ -60,7 +57,7 @@ def embed_live(players: list[dict[str, Any]], actions_total: int) -> discord.Emb
         for p in offline:
             since = ""
             if p.get("offline_since"):
-                since = f" *(vu {p['offline_since'][:16]})*"
+                since = f" *(vu {p['offline_since'][11:16]} UTC)*"
             lines.append(f"🔴 **{p['pseudo']}**{since}")
         embed.add_field(name=f"Déconnectés ({len(offline)})", value="\n".join(lines), inline=False)
     else:
@@ -74,12 +71,6 @@ def embed_live(players: list[dict[str, Any]], actions_total: int) -> discord.Emb
         ]
         embed.add_field(name=f"OUT ({len(out)})", value="\n".join(lines), inline=False)
 
-    # ── Total actions ──
-    embed.add_field(
-        name="⚡ Actions totales (connectés hors OUT)",
-        value=f"`{actions_total}` actions disponibles",
-        inline=False,
-    )
     embed.add_field(name="🔄 Dernière MAJ", value=f"`{_ts()}`", inline=True)
     return embed
 
@@ -144,7 +135,7 @@ def embed_alert(alert_type: str, actions: int, players_online: list[str]) -> dis
             value="\n".join(f"• **{p}**" for p in players_online),
             inline=False,
         )
-    e.add_field(name="Actions totales", value=f"`{actions}`", inline=True)
+    e.add_field(name="Joueurs connectés (hors OUT)", value=f"`{actions}`", inline=True)
     return e
 
 
