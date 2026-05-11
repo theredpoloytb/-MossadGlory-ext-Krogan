@@ -130,22 +130,22 @@ class ScannerCog(commands.Cog, name="Scanner"):
             elif is_online:
                 await db.upsert_player(pseudo, last_seen=now_iso)
 
-        # 3. Calcul des actions totales (connectés hors OUT)
+        # 3. Joueurs actifs (connectés hors OUT)
         all_players = await db.get_all_players()
         active = [
             p for p in all_players
             if p["online"] and not p["out_until"]
         ]
-        actions_total = sum(p.get("actions", 0) for p in active)
+        nb_active = len(active)
 
         # 4. Update embed live
-        await self._update_live(all_players, actions_total)
+        await self._update_live(all_players, nb_active)
 
         # 5. Envoi logs
         await self._send_logs(logs_to_send)
 
-        # 6. Alertes
-        await self._check_alerts(actions_total, [p["pseudo"] for p in active])
+        # 6. Alertes basées sur le nombre de joueurs connectés
+        await self._check_alerts(nb_active, [p["pseudo"] for p in active])
 
     # ─── Live embed ───────────────────────────────────────────────────────────
 
