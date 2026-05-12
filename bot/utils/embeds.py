@@ -4,10 +4,15 @@ Tous les embeds visuels du bot sont construits ici.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any
 
 import discord
+
+PARIS = timezone(timedelta(hours=2))  # UTC+2 (heure d'été France)
+
+def _ts() -> str:
+    return datetime.now(PARIS).strftime("%H:%M:%S")
 
 # ─── Palette ──────────────────────────────────────────────────────────────────
 COLOR_GREEN   = 0x2ECC71
@@ -78,28 +83,28 @@ def embed_live(players: list[dict[str, Any]], nb_active: int) -> discord.Embed:
 # ─── Logs ─────────────────────────────────────────────────────────────────────
 
 def embed_log_connect(pseudo: str) -> discord.Embed:
-    e = discord.Embed(color=COLOR_GREEN, timestamp=datetime.now(timezone.utc))
+    e = discord.Embed(color=COLOR_GREEN, timestamp=datetime.now(PARIS))
     e.set_footer(text=FOOTER_TEXT)
     e.description = f"🟢 **{pseudo}** connecté"
     return e
 
 
 def embed_log_disconnect(pseudo: str) -> discord.Embed:
-    e = discord.Embed(color=COLOR_RED, timestamp=datetime.now(timezone.utc))
+    e = discord.Embed(color=COLOR_RED, timestamp=datetime.now(PARIS))
     e.set_footer(text=FOOTER_TEXT)
     e.description = f"🔴 **{pseudo}** déconnecté"
     return e
 
 
 def embed_log_out_set(pseudo: str, out_until: str) -> discord.Embed:
-    e = discord.Embed(color=COLOR_ORANGE, timestamp=datetime.now(timezone.utc))
+    e = discord.Embed(color=COLOR_ORANGE, timestamp=datetime.now(PARIS))
     e.set_footer(text=FOOTER_TEXT)
     e.description = f"🕒 **{pseudo}** passé OUT — retour prévu `{out_until}`"
     return e
 
 
 def embed_log_out_returned(pseudo: str) -> discord.Embed:
-    e = discord.Embed(color=COLOR_BLUE, timestamp=datetime.now(timezone.utc))
+    e = discord.Embed(color=COLOR_BLUE, timestamp=datetime.now(PARIS))
     e.set_footer(text=FOOTER_TEXT)
     e.description = f"✅ **{pseudo}** est revenu de OUT"
     return e
