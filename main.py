@@ -48,7 +48,6 @@ COGS: list[str] = [
     "bot.cogs.out",
     "bot.cogs.scanner",
     "bot.cogs.admin_config",
-    "bot.cogs.actions",
 ]
 
 
