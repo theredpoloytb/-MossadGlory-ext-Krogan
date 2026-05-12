@@ -120,10 +120,10 @@ def embed_alert(alert_type: str, actions: int, players_online: list[str]) -> dis
     templates = {
         "action":          (COLOR_YELLOW,  "⚠️",  "Action possible",         "alerte"),
         "infiltration":    (COLOR_ORANGE,  "🚨",  "Infiltration possible",   "alerte"),
-        "missile":         (COLOR_RED,     "☢️",  "Missile possible",        "ALERTE CRITIQUE"),
+        "missile":         (COLOR_RED,     "🔴",  "Laser possible",        "ALERTE CRITIQUE"),
         "no_action":       (COLOR_GREEN,   "✅",  "Action plus possible",    "info"),
         "no_infiltration": (COLOR_GREEN,   "✅",  "Infiltration plus possible", "info"),
-        "no_missile":      (COLOR_GREEN,   "✅",  "Missile plus possible",   "info"),
+        "no_missile":      (COLOR_GREEN,   "✅",  "Laser plus possible",   "info"),
     }
     color, icon, title, label = templates.get(
         alert_type, (COLOR_GREY, "ℹ️", alert_type, "info")
