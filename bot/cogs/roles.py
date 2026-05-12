@@ -26,21 +26,21 @@ Ce bot surveille en temps réel les joueurs **Sword** connectés sur **lime.nati
 
 ### 🕒 Système OUT
 
-Si tu es **OUT** (indisponible temporairement), signale-le pour ne pas être compté dans les alertes.
+Si un joueur **Sword** est OUT (indisponible, pas en jeu), signalez-le pour qu'il ne soit pas compté dans les alertes.
 
 **Comment ça marche :**
 > Utilise la commande `/out set` dans n'importe quel salon.
-> **Exemple :** `/out set TonPseudo 16:30`
-> → Tu seras marqué OUT jusqu'à `16:30`, le bot te retirera automatiquement de la liste à cette heure.
+> **Exemple :** `/out set SnipperA 16:30`
+> → SnipperA sera marqué OUT jusqu'à `16:30`, le bot le retirera automatiquement à cette heure.
 
-Si tu reviens avant l'heure prévue :
-> `/out clear TonPseudo`
+Si le joueur revient avant l'heure prévue :
+> `/out clear SnipperA`
 
 ---
 
 ### 🔔 Alertes automatiques
 
-Le bot envoie des alertes selon le nombre de joueurs Sword connectés :
+Le bot envoie des alertes selon le nombre de joueurs Sword connectés **et non OUT** :
 
 > ⚠️ **Action possible** — 2 joueurs connectés
 > 🚨 **Infiltration possible** — 3 joueurs connectés
