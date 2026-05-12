@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+PARIS = timezone(timedelta(hours=2))
 
 import aiohttp
 import discord
@@ -84,7 +86,7 @@ class ScannerCog(commands.Cog, name="Scanner"):
             return
 
         now_iso = datetime.now(timezone.utc).isoformat()
-        now_time = datetime.now(timezone.utc).strftime("%H:%M")
+        now_time = datetime.now(PARIS).strftime("%H:%M")
 
         logs_to_send: list[discord.Embed] = []
 
