@@ -52,7 +52,11 @@ def embed_live(players: list[dict[str, Any]], nb_active: int) -> discord.Embed:
         for p in offline:
             since = ""
             if p.get("offline_since"):
-                since = f" *(vu {p['offline_since'][11:16]})*"
+                try:
+                    dt = datetime.fromisoformat(p["offline_since"]).replace(tzinfo=timezone.utc).astimezone(PARIS)
+                    since = f" *(vu {dt.strftime('%H:%M')})*"
+                except Exception:
+                    since = ""
             lines.append(f"🔴 **{p['pseudo']}**{since}")
         embed.add_field(name=f"Déconnectés ({len(offline)})", value="\n".join(lines), inline=False)
     else:
