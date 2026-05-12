@@ -49,6 +49,7 @@ COGS: list[str] = [
     "bot.cogs.scanner",
     "bot.cogs.admin_config",
     "bot.cogs.roles",
+    "bot.cogs.pause",
 ]
 
 
