@@ -15,7 +15,7 @@ import config
 log = logging.getLogger("krogan.ng_api")
 
 _cache: dict[str, Any] = {"players": [], "ts": 0.0}
-_CACHE_TTL = 20  # secondes
+_CACHE_TTL = 10  # secondes
 
 
 async def fetch_online_players(session: aiohttp.ClientSession) -> list[str]:
