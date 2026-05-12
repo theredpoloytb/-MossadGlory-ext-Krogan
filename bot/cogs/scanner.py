@@ -45,7 +45,7 @@ class ScannerCog(commands.Cog, name="Scanner"):
         raw = await db.cfg_get("live_msg_id")
         if raw and raw.isdigit():
             self._live_msg_id = int(raw)
-        self.scan_loop.change_interval(seconds=config.SCAN_INTERVAL)
+        self.scan_loop.change_interval(seconds=10)
         self.scan_loop.start()
         log.info("Scanner démarré (intervalle %ss, serveur %s)", config.SCAN_INTERVAL, config.NG_SERVER)
 
