@@ -103,12 +103,12 @@ class ScannerCog(commands.Cog, name="Scanner"):
                 try:
                     h, m = player["out_until"].split(":")
                     out_dt = now_paris.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
-                    # Si l'heure est dans le futur de plus de 12h → c'était hier, on avance d'un jour
-                    # Si l'heure semble dans le passé de plus de 12h → c'est pour demain, on avance d'un jour
                     diff = (now_paris - out_dt).total_seconds()
-                    if diff < -12 * 3600:
+                    # Si l'heure est dans le passé de plus de 12h → c'est pour demain
+                    if diff > 12 * 3600:
                         out_dt += timedelta(days=1)
                         diff = (now_paris - out_dt).total_seconds()
+                    # Retire le OUT seulement si 1 min après l'heure prévue
                     if diff >= 60:
                         await db.set_out(pseudo, None)
                         log.info("OUT expiré auto: %s", pseudo)
