@@ -200,7 +200,6 @@ class ScannerCog(commands.Cog, name="Scanner"):
         thr_action       = await db.cfg_get_int("threshold_action",      config.THRESHOLD_ACTION)
         thr_infiltration = await db.cfg_get_int("threshold_infiltration", config.THRESHOLD_INFILTRATION)
         thr_missile      = await db.cfg_get_int("threshold_missile",      config.THRESHOLD_MISSILE)
-        cooldown         = await db.cfg_get_int("alert_cooldown",         config.ALERT_COOLDOWN)
 
         thresholds = {
             "action":       (thr_action,       config.ROLE_ALERT_ACTION),
@@ -211,12 +210,14 @@ class ScannerCog(commands.Cog, name="Scanner"):
         now = datetime.now(timezone.utc)
 
         for atype, (threshold, role_id) in thresholds.items():
-            fired_at_raw = await db.alert_get("__global__", atype)
-            fired_at = datetime.fromisoformat(fired_at_raw) if fired_at_raw else None
+            # "fired" = alerte "possible" déjà envoyée et toujours active
+            fired = await db.alert_get("__global__", atype)
 
             if actions >= threshold:
-                if fired_at and (now - fired_at).total_seconds() < cooldown:
+                if fired:
+                    # Déjà alerté, on re-ping pas
                     continue
+                # Première fois qu'on atteint le seuil → ping
                 role_mention = ""
                 raw_role_id = await db.cfg_get_int(f"role_{atype}", role_id)
                 if raw_role_id:
@@ -226,22 +227,19 @@ class ScannerCog(commands.Cog, name="Scanner"):
                 try:
                     await ch.send(content=role_mention or None, embed=emb)
                     await db.alert_set("__global__", atype, now.isoformat())
-                    await db.alert_clear("__global__", f"no_{atype}")
                     log.info("Alerte %s envoyée (%d joueurs)", atype, actions)
                 except discord.DiscordException as exc:
                     log.warning("Envoi alerte %s échoué: %s", atype, exc)
             else:
-                if fired_at:
-                    no_fired_raw = await db.alert_get("__global__", f"no_{atype}")
-                    if not no_fired_raw:
-                        emb = embeds.embed_alert(f"no_{atype}", actions, [])
-                        try:
-                            await ch.send(embed=emb)
-                            await db.alert_set("__global__", f"no_{atype}", now.isoformat())
-                            await db.alert_clear("__global__", atype)
-                            log.info("Alerte no_%s envoyée", atype)
-                        except discord.DiscordException as exc:
-                            log.warning("Envoi no_alerte %s échoué: %s", atype, exc)
+                if fired:
+                    # Seuil redescendu → envoie "plus possible" une seule fois
+                    emb = embeds.embed_alert(f"no_{atype}", actions, [])
+                    try:
+                        await ch.send(embed=emb)
+                        await db.alert_clear("__global__", atype)
+                        log.info("Alerte no_%s envoyée", atype)
+                    except discord.DiscordException as exc:
+                        log.warning("Envoi no_alerte %s échoué: %s", atype, exc)
 
 
 async def setup(bot: commands.Bot) -> None:
