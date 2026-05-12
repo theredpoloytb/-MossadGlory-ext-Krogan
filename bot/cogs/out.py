@@ -40,7 +40,6 @@ class OutCog(commands.Cog, name="OUT"):
         pseudo="Pseudo du joueur",
         heure="Heure de retour (format HH:MM, ex: 16:30)",
     )
-    @admin_only()
     async def out_set(
         self, interaction: discord.Interaction, pseudo: str, heure: str
     ) -> None:
@@ -78,7 +77,6 @@ class OutCog(commands.Cog, name="OUT"):
 
     @out_group.command(name="clear", description="Retirer le statut OUT d'un joueur")
     @app_commands.describe(pseudo="Pseudo du joueur")
-    @admin_only()
     async def out_clear(self, interaction: discord.Interaction, pseudo: str) -> None:
         pseudo = pseudo.strip()
         player = await db.get_player(pseudo)
