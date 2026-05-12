@@ -200,18 +200,6 @@ class ScannerCog(commands.Cog, name="Scanner"):
     # ─── Alertes ─────────────────────────────────────────────────────────────
 
     async def _check_alerts(self, actions: int, online_pseudos: list[str]) -> None:
-        # Vérif pause alertes
-        pause_until = await db.cfg_get("alerts_paused_until")
-        if pause_until:
-            try:
-                pause_dt = datetime.fromisoformat(pause_until)
-                if datetime.now(timezone.utc) < pause_dt:
-                    return  # alertes en pause
-                else:
-                    await db.cfg_set("alerts_paused_until", "")  # pause expirée
-            except Exception:
-                pass
-
         ch_id = await db.cfg_get_int("channel_alerts", config.CHANNEL_ALERTS)
         if not ch_id:
             return
@@ -235,14 +223,23 @@ class ScannerCog(commands.Cog, name="Scanner"):
         now = datetime.now(timezone.utc)
 
         for atype, (threshold, role_id) in thresholds.items():
-            # "fired" = alerte "possible" déjà envoyée et toujours active
+            # Vérif pause par type
+            pause_val = await db.cfg_get(f"pause_{atype}_until")
+            if pause_val:
+                try:
+                    pause_dt = datetime.fromisoformat(pause_val)
+                    if now < pause_dt:
+                        continue  # ce type est en pause
+                    else:
+                        await db.cfg_set(f"pause_{atype}_until", "")  # expirée
+                except Exception:
+                    pass
+
             fired = await db.alert_get("__global__", atype)
 
             if actions >= threshold:
                 if fired:
-                    # Déjà alerté, on re-ping pas
                     continue
-                # Première fois qu'on atteint le seuil → ping
                 role_mention = ""
                 raw_role_id = await db.cfg_get_int(f"role_{atype}", role_id)
                 if raw_role_id:
@@ -257,7 +254,6 @@ class ScannerCog(commands.Cog, name="Scanner"):
                     log.warning("Envoi alerte %s échoué: %s", atype, exc)
             else:
                 if fired:
-                    # Seuil redescendu → envoie "plus possible" une seule fois
                     emb = embeds.embed_alert(f"no_{atype}", actions, [])
                     try:
                         await ch.send(embed=emb)
