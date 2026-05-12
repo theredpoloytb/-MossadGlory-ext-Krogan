@@ -86,7 +86,8 @@ class ScannerCog(commands.Cog, name="Scanner"):
             return
 
         now_iso = datetime.now(timezone.utc).isoformat()
-        now_time = datetime.now(PARIS).strftime("%H:%M")
+        now_paris = datetime.now(PARIS)
+        now_time = now_paris.strftime("%H:%M")
         logs_to_send: list[discord.Embed] = []
 
         for pseudo in pseudos:
@@ -97,12 +98,24 @@ class ScannerCog(commands.Cog, name="Scanner"):
             was_online = bool(player["online"])
             is_online = pseudo.lower() in online_set
 
-            # Retrait OUT automatique
-            if player.get("out_until") and now_time >= player["out_until"]:
-                await db.set_out(pseudo, None)
-                log.info("OUT expiré auto: %s", pseudo)
-                logs_to_send.append(embeds.embed_log_out_returned(pseudo))
-                player = await db.get_player(pseudo) or player
+            # Retrait OUT automatique — si l'heure est passée depuis au moins 1 min
+            if player.get("out_until"):
+                try:
+                    h, m = player["out_until"].split(":")
+                    out_dt = now_paris.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
+                    # Si l'heure est dans le futur de plus de 12h → c'était hier, on avance d'un jour
+                    # Si l'heure semble dans le passé de plus de 12h → c'est pour demain, on avance d'un jour
+                    diff = (now_paris - out_dt).total_seconds()
+                    if diff < -12 * 3600:
+                        out_dt += timedelta(days=1)
+                        diff = (now_paris - out_dt).total_seconds()
+                    if diff >= 60:
+                        await db.set_out(pseudo, None)
+                        log.info("OUT expiré auto: %s", pseudo)
+                        logs_to_send.append(embeds.embed_log_out_returned(pseudo))
+                        player = await db.get_player(pseudo) or player
+                except Exception:
+                    pass
 
             # Transitions
             if not was_online and is_online:
@@ -187,6 +200,18 @@ class ScannerCog(commands.Cog, name="Scanner"):
     # ─── Alertes ─────────────────────────────────────────────────────────────
 
     async def _check_alerts(self, actions: int, online_pseudos: list[str]) -> None:
+        # Vérif pause alertes
+        pause_until = await db.cfg_get("alerts_paused_until")
+        if pause_until:
+            try:
+                pause_dt = datetime.fromisoformat(pause_until)
+                if datetime.now(timezone.utc) < pause_dt:
+                    return  # alertes en pause
+                else:
+                    await db.cfg_set("alerts_paused_until", "")  # pause expirée
+            except Exception:
+                pass
+
         ch_id = await db.cfg_get_int("channel_alerts", config.CHANNEL_ALERTS)
         if not ch_id:
             return
