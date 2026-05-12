@@ -1,11 +1,13 @@
 """
-database/db.py — Couche d'accès SQLite asynchrone (aiosqlite)
-Toutes les interactions DB passent par ce module.
+database/db.py — Couche d'accès hybride :
+  - Watchlist → MongoDB (persist entre redeploys)
+  - Player state, config, alerts → SQLite (local, rapide)
 """
 from __future__ import annotations
 
 import aiosqlite
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -13,10 +15,35 @@ import config
 
 log = logging.getLogger("krogan.db")
 
-# ─── Init ─────────────────────────────────────────────────────────────────────
+# ─── MongoDB (motor) ──────────────────────────────────────────────────────────
+_mongo_col = None  # collection "krogan_watchlist"
+
+async def init_mongo() -> None:
+    global _mongo_col
+    mongo_url = os.getenv("MONGO_URL")
+    if not mongo_url:
+        log.warning("MONGO_URL non défini — watchlist en SQLite uniquement")
+        return
+    try:
+        import motor.motor_asyncio as motor
+        client = motor.AsyncIOMotorClient(
+            mongo_url,
+            serverSelectionTimeoutMS=8000,
+            tls=True,
+            tlsAllowInvalidCertificates=True,
+        )
+        await client.admin.command("ping")
+        _mongo_col = client["mossadglory"]["krogan_watchlist"]
+        log.info("✅ MongoDB connecté (collection krogan_watchlist)")
+    except Exception as exc:
+        log.warning("MongoDB indisponible: %s — fallback SQLite", exc)
+        _mongo_col = None
+
+
+# ─── Init SQLite ──────────────────────────────────────────────────────────────
 
 async def init_db() -> None:
-    """Crée les tables si elles n'existent pas."""
+    """Crée les tables SQLite + init MongoDB."""
     Path(config.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(config.DB_PATH) as db:
         await db.executescript("""
@@ -31,7 +58,6 @@ async def init_db() -> None:
                 online_since    TEXT,
                 offline_since   TEXT,
                 out_until       TEXT,
-                actions         INTEGER NOT NULL DEFAULT 0,
                 last_seen       TEXT
             );
 
@@ -48,46 +74,80 @@ async def init_db() -> None:
             );
         """)
         await db.commit()
+    await init_mongo()
+    # Sync watchlist MongoDB → SQLite au démarrage
+    if _mongo_col is not None:
+        await _sync_mongo_to_sqlite()
     log.info("DB initialisée → %s", config.DB_PATH)
+
+
+async def _sync_mongo_to_sqlite() -> None:
+    """Importe la watchlist MongoDB dans SQLite local au démarrage."""
+    try:
+        cursor = _mongo_col.find({}, {"pseudo": 1})
+        pseudos = [doc["pseudo"] async for doc in cursor]
+        async with aiosqlite.connect(config.DB_PATH) as db:
+            for pseudo in pseudos:
+                await db.execute(
+                    "INSERT OR IGNORE INTO watchlist (pseudo) VALUES (?)", (pseudo,)
+                )
+                await db.execute(
+                    "INSERT OR IGNORE INTO player_state (pseudo) VALUES (?)", (pseudo,)
+                )
+            await db.commit()
+        log.info("Sync MongoDB→SQLite: %d joueurs importés", len(pseudos))
+    except Exception as exc:
+        log.warning("Sync MongoDB→SQLite échouée: %s", exc)
 
 
 # ─── Watchlist ────────────────────────────────────────────────────────────────
 
 async def wl_add(pseudo: str) -> bool:
-    """Ajoute un joueur. Retourne False si déjà présent."""
+    """Ajoute dans MongoDB + SQLite. Retourne False si déjà présent."""
+    # SQLite
     async with aiosqlite.connect(config.DB_PATH) as db:
-        try:
-            await db.execute(
-                "INSERT INTO watchlist (pseudo) VALUES (?)", (pseudo,)
-            )
-            await db.execute(
-                """INSERT OR IGNORE INTO player_state (pseudo) VALUES (?)""",
-                (pseudo,),
-            )
-            await db.commit()
-            return True
-        except aiosqlite.IntegrityError:
+        cur = await db.execute(
+            "SELECT 1 FROM watchlist WHERE pseudo = ?", (pseudo,)
+        )
+        if await cur.fetchone():
             return False
+        await db.execute("INSERT INTO watchlist (pseudo) VALUES (?)", (pseudo,))
+        await db.execute(
+            "INSERT OR IGNORE INTO player_state (pseudo) VALUES (?)", (pseudo,)
+        )
+        await db.commit()
+    # MongoDB
+    if _mongo_col is not None:
+        try:
+            await _mongo_col.update_one(
+                {"pseudo": pseudo},
+                {"$setOnInsert": {"pseudo": pseudo}},
+                upsert=True,
+            )
+        except Exception as exc:
+            log.warning("MongoDB wl_add: %s", exc)
+    return True
 
 
 async def wl_remove(pseudo: str) -> bool:
-    """Supprime un joueur. Retourne False si introuvable."""
+    """Supprime de MongoDB + SQLite. Retourne False si introuvable."""
     async with aiosqlite.connect(config.DB_PATH) as db:
         cur = await db.execute(
             "DELETE FROM watchlist WHERE pseudo = ?", (pseudo,)
         )
-        await db.execute(
-            "DELETE FROM player_state WHERE pseudo = ?", (pseudo,)
-        )
-        await db.execute(
-            "DELETE FROM alert_state WHERE pseudo = ?", (pseudo,)
-        )
+        await db.execute("DELETE FROM player_state WHERE pseudo = ?", (pseudo,))
+        await db.execute("DELETE FROM alert_state WHERE pseudo = ?", (pseudo,))
         await db.commit()
-        return cur.rowcount > 0
+        removed = cur.rowcount > 0
+    if _mongo_col is not None:
+        try:
+            await _mongo_col.delete_one({"pseudo": pseudo})
+        except Exception as exc:
+            log.warning("MongoDB wl_remove: %s", exc)
+    return removed
 
 
 async def wl_list() -> list[str]:
-    """Retourne la liste des pseudos surveillés."""
     async with aiosqlite.connect(config.DB_PATH) as db:
         cur = await db.execute(
             "SELECT pseudo FROM watchlist ORDER BY pseudo COLLATE NOCASE"
@@ -131,7 +191,6 @@ async def get_all_players() -> list[dict[str, Any]]:
 
 
 async def upsert_player(pseudo: str, **kwargs: Any) -> None:
-    """Met à jour les champs d'un joueur (kwargs = colonnes)."""
     if not kwargs:
         return
     cols = ", ".join(f"{k} = ?" for k in kwargs)
@@ -183,7 +242,6 @@ async def cfg_get_int(key: str, default: int) -> int:
 # ─── Alert state ──────────────────────────────────────────────────────────────
 
 async def alert_get(pseudo: str, alert_type: str) -> str | None:
-    """Retourne l'ISO datetime du dernier fire, ou None."""
     async with aiosqlite.connect(config.DB_PATH) as db:
         cur = await db.execute(
             "SELECT fired_at FROM alert_state WHERE pseudo = ? AND alert_type = ?",
@@ -196,8 +254,7 @@ async def alert_get(pseudo: str, alert_type: str) -> str | None:
 async def alert_set(pseudo: str, alert_type: str, fired_at: str) -> None:
     async with aiosqlite.connect(config.DB_PATH) as db:
         await db.execute(
-            """INSERT OR REPLACE INTO alert_state (pseudo, alert_type, fired_at)
-               VALUES (?, ?, ?)""",
+            "INSERT OR REPLACE INTO alert_state (pseudo, alert_type, fired_at) VALUES (?, ?, ?)",
             (pseudo, alert_type, fired_at),
         )
         await db.commit()
