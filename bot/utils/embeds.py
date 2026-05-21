@@ -72,10 +72,10 @@ def embed_live(players: list[dict[str, Any]], nb_active: int) -> discord.Embed:
 
 # ─── Logs ─────────────────────────────────────────────────────────────────────
 
-def embed_log_connect(pseudo: str) -> discord.Embed:
-    e = discord.Embed(color=COLOR_GREEN, timestamp=datetime.now(PARIS))
+def embed_log_connect(pseudo: str, silent: bool = False) -> discord.Embed:
+    e = discord.Embed(color=COLOR_GREEN if not silent else COLOR_GREY, timestamp=datetime.now(PARIS))
     e.set_footer(text=FOOTER_TEXT)
-    e.description = f"🟢 **{pseudo}** connecté"
+    e.description = f"🟢 **{pseudo}** connecté" if not silent else f"🔄 **{pseudo}** reconnecté rapidement *(pas de ping)*"
     return e
 
 def embed_log_disconnect(pseudo: str) -> discord.Embed:
