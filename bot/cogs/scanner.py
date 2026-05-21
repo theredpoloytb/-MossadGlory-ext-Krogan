@@ -26,16 +26,26 @@ ALERT_TYPES = ("action", "infiltration", "missile")
 
 class ScannerCog(commands.Cog, name="Scanner"):
 
+    # Délai anti-spam : si un joueur se déco puis reco en moins de X secondes,
+    # on envoie le log mais sans ping (embed discret).
+    ANTISPAM_SECONDS = 30
+
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self._session: aiohttp.ClientSession | None = None
         self._live_msg_id: int | None = None
+        # pseudo.lower() -> datetime de la dernière déconnexion
+        self._last_disco: dict[str, datetime] = {}
 
     async def cog_load(self) -> None:
         self._session = aiohttp.ClientSession()
+        # Charger live_msg_id depuis MongoDB (survit aux redeploys Render)
         raw = await db.cfg_get("live_msg_id")
-        if raw and raw.isdigit():
+        if raw and str(raw).isdigit():
             self._live_msg_id = int(raw)
+            log.info("live_msg_id restauré depuis MongoDB : %s", self._live_msg_id)
+        else:
+            log.info("Aucun live_msg_id en base, un nouveau message sera créé.")
         self.scan_loop.start()
         self.live_loop.start()
         log.info("Scanner démarré (scan 1s / live 10s, serveur %s)", config.NG_SERVER)
@@ -121,11 +131,23 @@ class ScannerCog(commands.Cog, name="Scanner"):
             if not was_online and is_online:
                 await db.upsert_player(pseudo, online=1, online_since=now_iso, last_seen=now_iso)
                 log.info("🟢 %s connecté", pseudo)
-                logs_to_send.append(embeds.embed_log_connect(pseudo))
+                # Anti-spam : reco rapide après déco ? → log sans ping
+                last_dc = self._last_disco.get(pseudo.lower())
+                if last_dc and (now_paris - last_dc).total_seconds() < self.ANTISPAM_SECONDS:
+                    log.info("⚡ Anti-spam reco rapide: %s (%.0fs)", pseudo,
+                             (now_paris - last_dc).total_seconds())
+                    logs_to_send.append(embeds.embed_log_connect(pseudo, silent=True))
+                else:
+                    logs_to_send.append(embeds.embed_log_connect(pseudo))
+                self._last_disco.pop(pseudo.lower(), None)
 
             elif was_online and not is_online:
                 await db.upsert_player(pseudo, online=0, offline_since=now_iso, last_seen=now_iso)
                 log.info("🔴 %s déconnecté", pseudo)
+                self._last_disco[pseudo.lower()] = now_paris
+                # Anti-spam : déco rapide après une reco récente ?
+                # On envoie quand même le log déco, mais on le marque silent si besoin
+                # (ici on envoie toujours le log déco normalement)
                 logs_to_send.append(embeds.embed_log_disconnect(pseudo))
 
             elif is_online:
