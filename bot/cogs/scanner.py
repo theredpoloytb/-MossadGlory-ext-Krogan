@@ -2,6 +2,8 @@
 cogs/scanner.py — Deux boucles séparées :
   - scan_loop (1s)  : détecte connexions/déco, envoie logs et alertes
   - live_loop (10s) : met à jour l'embed live (anti rate-limit Discord)
+
+  Appelle également AntiDetectorCog à chaque co/déco détectée.
 """
 from __future__ import annotations
 
@@ -100,6 +102,9 @@ class ScannerCog(commands.Cog, name="Scanner"):
         now_time = now_paris.strftime("%H:%M")
         logs_to_send: list[discord.Embed] = []
 
+        # Récupération du cog AntiDetector pour notifier les co/déco
+        anti = self.bot.cogs.get("AntiDetector")
+
         for pseudo in pseudos:
             player = await db.get_player(pseudo)
             if not player:
@@ -131,6 +136,9 @@ class ScannerCog(commands.Cog, name="Scanner"):
             if not was_online and is_online:
                 await db.upsert_player(pseudo, online=1, online_since=now_iso, last_seen=now_iso)
                 log.info("🟢 %s connecté", pseudo)
+                # Notifie l'AntiDetector d'une connexion sword (watchlist)
+                # Note : l'anti detector gère aussi les alliés via la même méthode,
+                # mais ici on notifie uniquement les swords (watchlist) pour les déco.
                 # Anti-spam : reco rapide après déco ? → log sans ping
                 last_dc = self._last_disco.get(pseudo.lower())
                 if last_dc and (now_paris - last_dc).total_seconds() < self.ANTISPAM_SECONDS:
@@ -145,13 +153,42 @@ class ScannerCog(commands.Cog, name="Scanner"):
                 await db.upsert_player(pseudo, online=0, offline_since=now_iso, last_seen=now_iso)
                 log.info("🔴 %s déconnecté", pseudo)
                 self._last_disco[pseudo.lower()] = now_paris
-                # Anti-spam : déco rapide après une reco récente ?
-                # On envoie quand même le log déco, mais on le marque silent si besoin
-                # (ici on envoie toujours le log déco normalement)
                 logs_to_send.append(embeds.embed_log_disconnect(pseudo))
+                # Notifie l'AntiDetector : un sword vient de se déco
+                if anti:
+                    try:
+                        await anti.on_sword_disconnect(pseudo)
+                    except Exception as exc:
+                        log.warning("AntiDetector on_sword_disconnect error: %s", exc)
 
             elif is_online:
                 await db.upsert_player(pseudo, last_seen=now_iso)
+
+        # ── Scan des alliés (hors watchlist) pour détecter leurs connexions ──
+        allies = await db.ally_list()
+        for ally in allies:
+            is_ally_online = ally.lower() in online_set
+            # On stocke l'état de connexion des alliés dans un cache interne
+            was_ally_online = getattr(self, "_ally_online_cache", {}).get(ally.lower(), None)
+
+            if not hasattr(self, "_ally_online_cache"):
+                self._ally_online_cache: dict[str, bool] = {}
+
+            if was_ally_online is None:
+                # Premier tick : initialise sans déclencher d'alerte
+                self._ally_online_cache[ally.lower()] = is_ally_online
+                continue
+
+            if not was_ally_online and is_ally_online:
+                # Allié vient de se connecter → notifie l'AntiDetector
+                log.info("🟢 Allié connecté : %s", ally)
+                if anti:
+                    try:
+                        await anti.on_ally_connect(ally)
+                    except Exception as exc:
+                        log.warning("AntiDetector on_ally_connect error: %s", exc)
+
+            self._ally_online_cache[ally.lower()] = is_ally_online
 
         # Alertes
         all_players = await db.get_all_players()
