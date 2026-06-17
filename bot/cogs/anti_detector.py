@@ -41,7 +41,7 @@ class AntiDetectorCog(commands.Cog, name="AntiDetector"):
         self.bot = bot
 
         # Set des alliés actuellement connectés (lowercase)
-        self._allies_online: set[str] = {}
+        self._allies_online: set[str] = set()
 
         # Timestamp du dernier passage à 2+ alliés connectés
         # None = pas de "danger" actif
