@@ -52,7 +52,32 @@ class AntiDetectorCog(commands.Cog, name="AntiDetector"):
 
     async def cog_load(self) -> None:
         self._cleanup.start()
+        await self._restore_allies_online()
         log.info("AntiDetector démarré (fenêtre %ds, trigger = 2 alliés co)", ANTI_WINDOW)
+
+    async def _restore_allies_online(self) -> None:
+        """
+        Au démarrage, compare la liste d'alliés en DB avec les joueurs
+        actuellement en ligne sur le serveur NationsGlory pour reconstruire
+        _allies_online sans attendre le prochain tick du scanner.
+        """
+        import aiohttp
+        from bot.utils import ng_api
+        try:
+            async with aiohttp.ClientSession() as session:
+                online_now = await ng_api.fetch_online_players(session)
+            online_set = {p.lower() for p in online_now}
+            allies = await db.ally_list()
+            for ally in allies:
+                if ally.lower() in online_set:
+                    self._allies_online.add(ally.lower())
+            nb = len(self._allies_online)
+            log.info("[Anti] Restauration : %d allié(s) déjà connecté(s) → %s", nb, self._allies_online)
+            if nb >= 2:
+                self._danger_since = time.time()
+                log.info("[Anti] ⚠️ 2+ alliés déjà co au démarrage → fenêtre danger ouverte")
+        except Exception as exc:
+            log.warning("[Anti] Restauration alliés échouée: %s", exc)
 
     async def cog_unload(self) -> None:
         self._cleanup.cancel()
