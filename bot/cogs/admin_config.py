@@ -69,6 +69,7 @@ class AdminConfigCog(commands.Cog, name="Config"):
             ("channel_live",         str(cfg.CHANNEL_LIVE)),
             ("channel_logs",         str(cfg.CHANNEL_LOGS)),
             ("channel_alerts",       str(cfg.CHANNEL_ALERTS)),
+            ("channel_anti",         "0"),
             ("role_action",          str(cfg.ROLE_ALERT_ACTION)),
             ("role_infiltration",    str(cfg.ROLE_ALERT_INFILTRATION)),
             ("role_missile",         str(cfg.ROLE_ALERT_MISSILE)),
@@ -92,7 +93,7 @@ class AdminConfigCog(commands.Cog, name="Config"):
     # ── /config set_channel ────────────────────────────────────────────────────
     @cfg_group.command(
         name="set_channel",
-        description="Définir un salon (live / logs / alertes)",
+        description="Définir un salon (live / logs / alertes / anti)",
     )
     @app_commands.describe(
         type="Type de salon",
@@ -102,6 +103,7 @@ class AdminConfigCog(commands.Cog, name="Config"):
         app_commands.Choice(name="Live watchlist", value="channel_live"),
         app_commands.Choice(name="Logs",           value="channel_logs"),
         app_commands.Choice(name="Alertes",        value="channel_alerts"),
+        app_commands.Choice(name="Anti (fuites)",  value="channel_anti"),
     ])
     @admin_only()
     async def cfg_set_channel(
