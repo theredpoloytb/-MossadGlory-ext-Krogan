@@ -2,6 +2,7 @@
 database/db.py — Couche d'accès hybride :
   - Watchlist → MongoDB (persist entre redeploys)
   - Player state, config, alerts → SQLite (local, rapide)
+  - Allies → SQLite (liste des membres du camp)
 """
 from __future__ import annotations
 
@@ -71,6 +72,11 @@ async def init_db() -> None:
                 alert_type      TEXT NOT NULL,
                 fired_at        TEXT NOT NULL,
                 PRIMARY KEY (pseudo, alert_type)
+            );
+
+            CREATE TABLE IF NOT EXISTS allies (
+                pseudo      TEXT PRIMARY KEY COLLATE NOCASE,
+                added_at    TEXT NOT NULL DEFAULT (datetime('now'))
             );
         """)
         await db.commit()
@@ -267,3 +273,45 @@ async def alert_clear(pseudo: str, alert_type: str) -> None:
             (pseudo, alert_type),
         )
         await db.commit()
+
+
+# ─── Allies ───────────────────────────────────────────────────────────────────
+
+async def ally_add(pseudo: str) -> bool:
+    """Ajoute un allié. Retourne False si déjà présent."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT 1 FROM allies WHERE pseudo = ?", (pseudo,)
+        )
+        if await cur.fetchone():
+            return False
+        await db.execute("INSERT INTO allies (pseudo) VALUES (?)", (pseudo,))
+        await db.commit()
+    return True
+
+
+async def ally_remove(pseudo: str) -> bool:
+    """Supprime un allié. Retourne False si introuvable."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute(
+            "DELETE FROM allies WHERE pseudo = ?", (pseudo,)
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def ally_list() -> list[str]:
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT pseudo FROM allies ORDER BY pseudo COLLATE NOCASE"
+        )
+        rows = await cur.fetchall()
+        return [r[0] for r in rows]
+
+
+async def ally_exists(pseudo: str) -> bool:
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT 1 FROM allies WHERE pseudo = ?", (pseudo,)
+        )
+        return await cur.fetchone() is not None
