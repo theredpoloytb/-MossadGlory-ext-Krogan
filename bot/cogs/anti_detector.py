@@ -1,11 +1,12 @@
 """
 cogs/anti_detector.py — Détecte les swords (watchlist) qui se déconnectent
-dans les 4 minutes suivant la connexion d'un allié.
+dans les 4 minutes suivant le passage à 2+ alliés connectés simultanément.
 
-Logique :
-  - Un allié se connecte → timestamp enregistré
-  - Un sword se déco dans les 240s qui suivent → alerte "anti" dans channel dédié
-  - Cooldown 5 min par paire (ally, sword) pour éviter le spam
+Logique CORRECTE :
+  - On track combien d'alliés sont connectés en temps réel
+  - Quand le compteur passe de 1 → 2 (ou plus) → timestamp "danger" enregistré
+  - Un sword se déco dans les 240s qui suivent ce passage à 2 → alerte anti
+  - Cooldown 5 min par sword pour éviter le spam
 
 Commandes :
   /allies add <pseudo>    — Ajouter un allié
@@ -29,37 +30,41 @@ log = logging.getLogger("krogan.anti")
 # Fenêtre de détection en secondes (4 minutes)
 ANTI_WINDOW = 240
 
-# Cooldown anti-spam entre deux alertes identiques (paire ally+sword)
+# Cooldown anti-spam par sword
 ALERT_COOLDOWN = 300  # 5 minutes
 
 
 class AntiDetectorCog(commands.Cog, name="AntiDetector"):
-    """Détecte les swords qui fuient à la connexion d'un allié."""
+    """Détecte les swords qui fuient quand 2 alliés sont connectés."""
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-        # { pseudo_ally (lowercase) : timestamp float }
-        self._ally_connect_times: dict[str, float] = {}
-        # { (ally_lower, sword_lower) : timestamp dernière alerte }
-        self._alert_cooldown: dict[tuple[str, str], float] = {}
+
+        # Set des alliés actuellement connectés (lowercase)
+        self._allies_online: set[str] = {}
+
+        # Timestamp du dernier passage à 2+ alliés connectés
+        # None = pas de "danger" actif
+        self._danger_since: float | None = None
+
+        # { sword_lower : timestamp dernière alerte }
+        self._alert_cooldown: dict[str, float] = {}
 
     async def cog_load(self) -> None:
         self._cleanup.start()
-        log.info("AntiDetector démarré (fenêtre %ds)", ANTI_WINDOW)
+        log.info("AntiDetector démarré (fenêtre %ds, trigger = 2 alliés co)", ANTI_WINDOW)
 
     async def cog_unload(self) -> None:
         self._cleanup.cancel()
 
-    # ─── Nettoyage périodique du cache ────────────────────────────────────────
+    # ─── Nettoyage périodique ─────────────────────────────────────────────────
 
     @tasks.loop(minutes=5)
     async def _cleanup(self) -> None:
-        now = time.time()
-        expired = [k for k, t in self._ally_connect_times.items() if now - t > ANTI_WINDOW]
-        for k in expired:
-            del self._ally_connect_times[k]
-        if expired:
-            log.debug("AntiDetector: %d entrées expirées nettoyées", len(expired))
+        # Si la fenêtre danger est expirée, on la reset
+        if self._danger_since and time.time() - self._danger_since > ANTI_WINDOW:
+            self._danger_since = None
+            log.debug("[Anti] Fenêtre danger expirée, reset")
 
     @_cleanup.before_loop
     async def _before_cleanup(self) -> None:
@@ -70,41 +75,58 @@ class AntiDetectorCog(commands.Cog, name="AntiDetector"):
     async def on_ally_connect(self, pseudo: str) -> None:
         """
         Appelé par scanner.py quand un allié se connecte.
-        Enregistre le timestamp de connexion.
+        Si ça fait passer le total à 2+, on ouvre la fenêtre danger.
         """
-        self._ally_connect_times[pseudo.lower()] = time.time()
-        log.info("[Anti] Allié connecté : %s", pseudo)
+        self._allies_online.add(pseudo.lower())
+        count = len(self._allies_online)
+        log.info("[Anti] Allié connecté : %s (total alliés online : %d)", pseudo, count)
+
+        if count >= 2 and self._danger_since is None:
+            self._danger_since = time.time()
+            log.info("[Anti] ⚠️ 2 alliés connectés → fenêtre danger ouverte")
+
+    async def on_ally_disconnect(self, pseudo: str) -> None:
+        """
+        Appelé par scanner.py quand un allié se déconnecte.
+        Si on tombe sous 2 alliés, on ferme la fenêtre danger.
+        """
+        self._allies_online.discard(pseudo.lower())
+        count = len(self._allies_online)
+        log.info("[Anti] Allié déconnecté : %s (total alliés online : %d)", pseudo, count)
+
+        if count < 2:
+            self._danger_since = None
+            log.info("[Anti] Moins de 2 alliés → fenêtre danger fermée")
 
     async def on_sword_disconnect(self, pseudo: str) -> None:
         """
         Appelé par scanner.py quand un sword (watchlist) se déconnecte.
-        Vérifie si un allié s'est connecté dans les 4 dernières minutes.
+        Si la fenêtre danger est active → alerte anti.
         """
         now = time.time()
 
-        # Cherche tous les alliés connectés dans la fenêtre
-        triggered_by = [
-            ally for ally, t in self._ally_connect_times.items()
-            if now - t <= ANTI_WINDOW
-        ]
+        if self._danger_since is None:
+            return  # Pas de danger actif, rien à signaler
 
-        if not triggered_by:
+        if now - self._danger_since > ANTI_WINDOW:
+            # Fenêtre expirée
+            self._danger_since = None
             return
 
-        for ally in triggered_by:
-            pair = (ally, pseudo.lower())
-            last_alert = self._alert_cooldown.get(pair, 0)
-            if now - last_alert < ALERT_COOLDOWN:
-                log.debug("[Anti] Cooldown actif pour paire (%s, %s)", ally, pseudo)
-                continue
+        # Cooldown par sword
+        last_alert = self._alert_cooldown.get(pseudo.lower(), 0)
+        if now - last_alert < ALERT_COOLDOWN:
+            log.debug("[Anti] Cooldown actif pour sword %s", pseudo)
+            return
 
-            self._alert_cooldown[pair] = now
-            delay = now - self._ally_connect_times[ally]
-            await self._send_alert(pseudo, ally, delay)
+        self._alert_cooldown[pseudo.lower()] = now
+        delay = now - self._danger_since
+        nb_allies = len(self._allies_online)
+        await self._send_alert(pseudo, delay, nb_allies)
 
     # ─── Envoi de l'alerte ────────────────────────────────────────────────────
 
-    async def _send_alert(self, sword: str, ally: str, delay_seconds: float) -> None:
+    async def _send_alert(self, sword: str, delay_seconds: float, nb_allies: int) -> None:
         ch_id = await db.cfg_get_int("channel_anti", 0)
         if not ch_id:
             log.warning("[Anti] channel_anti non configuré — utilise /config set_channel anti #salon")
@@ -119,29 +141,31 @@ class AntiDetectorCog(commands.Cog, name="AntiDetector"):
             log.warning("[Anti] channel_anti introuvable (id=%s)", ch_id)
             return
 
-        embed = self._build_embed(sword, ally, delay_seconds)
+        embed = self._build_embed(sword, delay_seconds, nb_allies)
         try:
             await ch.send(embed=embed)
-            log.info("[Anti] Alerte envoyée : %s a fui après co de %s (%.0fs)", sword, ally, delay_seconds)
+            log.info("[Anti] Alerte : %s a fui (%.0fs après passage à 2 alliés)", sword, delay_seconds)
         except discord.DiscordException as exc:
             log.warning("[Anti] Envoi alerte échoué: %s", exc)
 
-    def _build_embed(self, sword: str, ally: str, delay_seconds: float) -> discord.Embed:
+    def _build_embed(self, sword: str, delay_seconds: float, nb_allies: int) -> discord.Embed:
         minutes = int(delay_seconds // 60)
         seconds = int(delay_seconds % 60)
         delay_str = f"{minutes}m {seconds}s" if minutes else f"{seconds}s"
 
+        allies_str = ", ".join(f"`{a}`" for a in self._allies_online) if self._allies_online else "?"
+
         embed = discord.Embed(
             title="🏃 Anti détecté !",
             description=(
-                f"**`{sword}`** s'est déconnecté **{delay_str}** après la connexion de **`{ally}`**.\n"
-                f"Il avait probablement **2 actions** et a fui pour éviter d'être actionné."
+                f"**`{sword}`** s'est déconnecté **{delay_str}** après le passage à **{nb_allies} alliés** connectés.\n"
+                f"Il a fui pour éviter de se faire action."
             ),
             color=discord.Color.orange(),
             timestamp=discord.utils.utcnow(),
         )
         embed.add_field(name="⚔️ Sword", value=f"`{sword}`", inline=True)
-        embed.add_field(name="🟢 Allié connecté", value=f"`{ally}`", inline=True)
+        embed.add_field(name="👥 Alliés connectés", value=allies_str, inline=True)
         embed.add_field(name="⏱️ Délai de fuite", value=f"`{delay_str}`", inline=True)
         embed.set_footer(text="MossadGlory • Anti Detector")
         return embed
@@ -181,8 +205,7 @@ class AntiDetectorCog(commands.Cog, name="AntiDetector"):
     @admin_only()
     async def allies_remove(self, interaction: discord.Interaction, pseudo: str) -> None:
         removed = await db.ally_remove(pseudo)
-        # Nettoyage du cache live
-        self._ally_connect_times.pop(pseudo.lower(), None)
+        self._allies_online.discard(pseudo.lower())
         if not removed:
             await interaction.response.send_message(
                 embed=discord.Embed(
@@ -214,23 +237,24 @@ class AntiDetectorCog(commands.Cog, name="AntiDetector"):
             )
             return
 
-        # Indique lesquels sont actuellement en cache (connectés récemment)
-        now = time.time()
         lines = []
         for a in allies:
-            t = self._ally_connect_times.get(a.lower())
-            if t and now - t <= ANTI_WINDOW:
-                remaining = int(ANTI_WINDOW - (now - t))
-                lines.append(f"🟢 `{a}` — connecté il y a {int(now - t)}s (fenêtre active : {remaining}s)")
+            if a.lower() in self._allies_online:
+                lines.append(f"🟢 `{a}` — connecté")
             else:
                 lines.append(f"⚫ `{a}`")
+
+        nb_online = len(self._allies_online)
+        danger = self._danger_since is not None and time.time() - self._danger_since <= ANTI_WINDOW
+        status = f"⚠️ Fenêtre danger ACTIVE ({nb_online} alliés co)" if danger else f"✅ Pas de danger ({nb_online} allié(s) co)"
 
         embed = discord.Embed(
             title="👥 Liste des alliés",
             description="\n".join(lines),
-            color=discord.Color.blue(),
+            color=discord.Color.red() if danger else discord.Color.blue(),
         )
-        embed.set_footer(text=f"{len(allies)} allié(s) — fenêtre anti : {ANTI_WINDOW}s")
+        embed.add_field(name="Statut", value=status, inline=False)
+        embed.set_footer(text=f"{len(allies)} allié(s) — trigger : 2 connectés simultanément")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
