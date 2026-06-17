@@ -50,6 +50,7 @@ COGS: list[str] = [
     "bot.cogs.admin_config",
     "bot.cogs.roles",
     "bot.cogs.pause",
+    "bot.cogs.anti_detector",  # Détecteur de fuites anti
 ]
 
 
