@@ -188,6 +188,15 @@ class ScannerCog(commands.Cog, name="Scanner"):
                     except Exception as exc:
                         log.warning("AntiDetector on_ally_connect error: %s", exc)
 
+            elif was_ally_online and not is_ally_online:
+                # Allié vient de se déconnecter → notifie l'AntiDetector
+                log.info("🔴 Allié déconnecté : %s", ally)
+                if anti:
+                    try:
+                        await anti.on_ally_disconnect(ally)
+                    except Exception as exc:
+                        log.warning("AntiDetector on_ally_disconnect error: %s", exc)
+
             self._ally_online_cache[ally.lower()] = is_ally_online
 
         # Alertes
