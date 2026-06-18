@@ -1,8 +1,9 @@
 """
 database/db.py — Couche d'accès hybride :
-  - Watchlist → MongoDB (persist entre redeploys)
-  - Player state, config, alerts → SQLite (local, rapide)
-  - Allies → SQLite (liste des membres du camp)
+  - Watchlist   → MongoDB (persist entre redeploys)
+  - Allies      → MongoDB (persist entre redeploys)
+  - Bot config  → MongoDB (persist entre redeploys)
+  - Player state, alert_state → SQLite (local, recalculé en live)
 """
 from __future__ import annotations
 
@@ -16,14 +17,17 @@ import config
 
 log = logging.getLogger("krogan.db")
 
-# ─── MongoDB (motor) ──────────────────────────────────────────────────────────
-_mongo_col = None  # collection "krogan_watchlist"
+# ─── MongoDB collections ──────────────────────────────────────────────────────
+_mongo_watchlist = None   # collection "krogan_watchlist"
+_mongo_allies    = None   # collection "krogan_allies"
+_mongo_config    = None   # collection "krogan_config"
+
 
 async def init_mongo() -> None:
-    global _mongo_col
+    global _mongo_watchlist, _mongo_allies, _mongo_config
     mongo_url = os.getenv("MONGO_URL")
     if not mongo_url:
-        log.warning("MONGO_URL non défini — watchlist en SQLite uniquement")
+        log.warning("MONGO_URL non défini — watchlist/allies/config en SQLite uniquement")
         return
     try:
         import motor.motor_asyncio as motor
@@ -34,17 +38,20 @@ async def init_mongo() -> None:
             tlsAllowInvalidCertificates=True,
         )
         await client.admin.command("ping")
-        _mongo_col = client["mossadglory"]["krogan_watchlist"]
-        log.info("✅ MongoDB connecté (collection krogan_watchlist)")
+        db = client["mossadglory"]
+        _mongo_watchlist = db["krogan_watchlist"]
+        _mongo_allies    = db["krogan_allies"]
+        _mongo_config    = db["krogan_config"]
+        log.info("✅ MongoDB connecté (watchlist + allies + config)")
     except Exception as exc:
         log.warning("MongoDB indisponible: %s — fallback SQLite", exc)
-        _mongo_col = None
+        _mongo_watchlist = _mongo_allies = _mongo_config = None
 
 
 # ─── Init SQLite ──────────────────────────────────────────────────────────────
 
 async def init_db() -> None:
-    """Crée les tables SQLite + init MongoDB."""
+    """Crée les tables SQLite + init MongoDB + sync."""
     Path(config.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(config.DB_PATH) as db:
         await db.executescript("""
@@ -80,17 +87,24 @@ async def init_db() -> None:
             );
         """)
         await db.commit()
+
     await init_mongo()
-    # Sync watchlist MongoDB → SQLite au démarrage
-    if _mongo_col is not None:
-        await _sync_mongo_to_sqlite()
+
+    if _mongo_watchlist is not None:
+        await _sync_watchlist_to_sqlite()
+    if _mongo_allies is not None:
+        await _sync_allies_to_sqlite()
+    if _mongo_config is not None:
+        await _sync_config_to_sqlite()
+
     log.info("DB initialisée → %s", config.DB_PATH)
 
 
-async def _sync_mongo_to_sqlite() -> None:
-    """Importe la watchlist MongoDB dans SQLite local au démarrage."""
+# ─── Sync MongoDB → SQLite au démarrage ──────────────────────────────────────
+
+async def _sync_watchlist_to_sqlite() -> None:
     try:
-        cursor = _mongo_col.find({}, {"pseudo": 1})
+        cursor = _mongo_watchlist.find({}, {"pseudo": 1})
         pseudos = [doc["pseudo"] async for doc in cursor]
         async with aiosqlite.connect(config.DB_PATH) as db:
             for pseudo in pseudos:
@@ -101,16 +115,47 @@ async def _sync_mongo_to_sqlite() -> None:
                     "INSERT OR IGNORE INTO player_state (pseudo) VALUES (?)", (pseudo,)
                 )
             await db.commit()
-        log.info("Sync MongoDB→SQLite: %d joueurs importés", len(pseudos))
+        log.info("Sync watchlist MongoDB→SQLite: %d joueurs", len(pseudos))
     except Exception as exc:
-        log.warning("Sync MongoDB→SQLite échouée: %s", exc)
+        log.warning("Sync watchlist MongoDB→SQLite échouée: %s", exc)
+
+
+async def _sync_allies_to_sqlite() -> None:
+    try:
+        cursor = _mongo_allies.find({}, {"pseudo": 1})
+        pseudos = [doc["pseudo"] async for doc in cursor]
+        async with aiosqlite.connect(config.DB_PATH) as db:
+            for pseudo in pseudos:
+                await db.execute(
+                    "INSERT OR IGNORE INTO allies (pseudo) VALUES (?)", (pseudo,)
+                )
+            await db.commit()
+        log.info("Sync allies MongoDB→SQLite: %d alliés", len(pseudos))
+    except Exception as exc:
+        log.warning("Sync allies MongoDB→SQLite échouée: %s", exc)
+
+
+async def _sync_config_to_sqlite() -> None:
+    try:
+        cursor = _mongo_config.find({}, {"key": 1, "value": 1})
+        docs = [doc async for doc in cursor]
+        async with aiosqlite.connect(config.DB_PATH) as db:
+            for doc in docs:
+                if "key" in doc and "value" in doc:
+                    await db.execute(
+                        "INSERT OR IGNORE INTO bot_config (key, value) VALUES (?, ?)",
+                        (doc["key"], doc["value"]),
+                    )
+            await db.commit()
+        log.info("Sync config MongoDB→SQLite: %d clés", len(docs))
+    except Exception as exc:
+        log.warning("Sync config MongoDB→SQLite échouée: %s", exc)
 
 
 # ─── Watchlist ────────────────────────────────────────────────────────────────
 
 async def wl_add(pseudo: str) -> bool:
     """Ajoute dans MongoDB + SQLite. Retourne False si déjà présent."""
-    # SQLite
     async with aiosqlite.connect(config.DB_PATH) as db:
         cur = await db.execute(
             "SELECT 1 FROM watchlist WHERE pseudo = ?", (pseudo,)
@@ -122,10 +167,9 @@ async def wl_add(pseudo: str) -> bool:
             "INSERT OR IGNORE INTO player_state (pseudo) VALUES (?)", (pseudo,)
         )
         await db.commit()
-    # MongoDB
-    if _mongo_col is not None:
+    if _mongo_watchlist is not None:
         try:
-            await _mongo_col.update_one(
+            await _mongo_watchlist.update_one(
                 {"pseudo": pseudo},
                 {"$setOnInsert": {"pseudo": pseudo}},
                 upsert=True,
@@ -145,9 +189,9 @@ async def wl_remove(pseudo: str) -> bool:
         await db.execute("DELETE FROM alert_state WHERE pseudo = ?", (pseudo,))
         await db.commit()
         removed = cur.rowcount > 0
-    if _mongo_col is not None:
+    if _mongo_watchlist is not None:
         try:
-            await _mongo_col.delete_one({"pseudo": pseudo})
+            await _mongo_watchlist.delete_one({"pseudo": pseudo})
         except Exception as exc:
             log.warning("MongoDB wl_remove: %s", exc)
     return removed
@@ -220,6 +264,7 @@ async def set_out(pseudo: str, out_until: str | None) -> None:
 # ─── Config bot ───────────────────────────────────────────────────────────────
 
 async def cfg_get(key: str, default: str | None = None) -> str | None:
+    """Lit depuis SQLite (déjà syncé depuis MongoDB au démarrage)."""
     async with aiosqlite.connect(config.DB_PATH) as db:
         cur = await db.execute(
             "SELECT value FROM bot_config WHERE key = ?", (key,)
@@ -229,12 +274,22 @@ async def cfg_get(key: str, default: str | None = None) -> str | None:
 
 
 async def cfg_set(key: str, value: str) -> None:
+    """Écrit dans SQLite + MongoDB."""
     async with aiosqlite.connect(config.DB_PATH) as db:
         await db.execute(
             "INSERT OR REPLACE INTO bot_config (key, value) VALUES (?, ?)",
             (key, value),
         )
         await db.commit()
+    if _mongo_config is not None:
+        try:
+            await _mongo_config.update_one(
+                {"key": key},
+                {"$set": {"key": key, "value": value}},
+                upsert=True,
+            )
+        except Exception as exc:
+            log.warning("MongoDB cfg_set: %s", exc)
 
 
 async def cfg_get_int(key: str, default: int) -> int:
@@ -278,7 +333,7 @@ async def alert_clear(pseudo: str, alert_type: str) -> None:
 # ─── Allies ───────────────────────────────────────────────────────────────────
 
 async def ally_add(pseudo: str) -> bool:
-    """Ajoute un allié. Retourne False si déjà présent."""
+    """Ajoute dans MongoDB + SQLite. Retourne False si déjà présent."""
     async with aiosqlite.connect(config.DB_PATH) as db:
         cur = await db.execute(
             "SELECT 1 FROM allies WHERE pseudo = ?", (pseudo,)
@@ -287,17 +342,32 @@ async def ally_add(pseudo: str) -> bool:
             return False
         await db.execute("INSERT INTO allies (pseudo) VALUES (?)", (pseudo,))
         await db.commit()
+    if _mongo_allies is not None:
+        try:
+            await _mongo_allies.update_one(
+                {"pseudo": pseudo},
+                {"$setOnInsert": {"pseudo": pseudo}},
+                upsert=True,
+            )
+        except Exception as exc:
+            log.warning("MongoDB ally_add: %s", exc)
     return True
 
 
 async def ally_remove(pseudo: str) -> bool:
-    """Supprime un allié. Retourne False si introuvable."""
+    """Supprime de MongoDB + SQLite. Retourne False si introuvable."""
     async with aiosqlite.connect(config.DB_PATH) as db:
         cur = await db.execute(
             "DELETE FROM allies WHERE pseudo = ?", (pseudo,)
         )
         await db.commit()
-        return cur.rowcount > 0
+        removed = cur.rowcount > 0
+    if _mongo_allies is not None:
+        try:
+            await _mongo_allies.delete_one({"pseudo": pseudo})
+        except Exception as exc:
+            log.warning("MongoDB ally_remove: %s", exc)
+    return removed
 
 
 async def ally_list() -> list[str]:
