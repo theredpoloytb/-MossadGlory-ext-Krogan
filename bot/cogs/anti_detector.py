@@ -12,6 +12,7 @@ Commandes :
   /allies add <pseudo>    — Ajouter un allié
   /allies remove <pseudo> — Retirer un allié
   /allies list            — Lister les alliés
+  /allies seed            — [ONE-SHOT] Importer la liste de base
 """
 from __future__ import annotations
 
@@ -32,6 +33,23 @@ ANTI_WINDOW = 240
 
 # Cooldown anti-spam par sword
 ALERT_COOLDOWN = 300  # 5 minutes
+
+ALLIES_SEED = [
+    "BRBradley70",
+    "carpask",
+    "Eri0ss",
+    "Gencyvejunior",
+    "grosbourrin",
+    "Kyzzer_",
+    "Madara__Uchiha",
+    "Nathdu12",
+    "Nonoz599",
+    "poorayanez",
+    "theredpoloytb",
+    "toto132",
+    "Tsuki_zZzZ",
+    "xsaqm_m",
+]
 
 
 class AntiDetectorCog(commands.Cog, name="AntiDetector"):
@@ -281,6 +299,26 @@ class AntiDetectorCog(commands.Cog, name="AntiDetector"):
         embed.add_field(name="Statut", value=status, inline=False)
         embed.set_footer(text=f"{len(allies)} allié(s) — trigger : 2 connectés simultanément")
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @allies_group.command(name="seed", description="[ONE-SHOT] Importer la liste des alliés de base")
+    @admin_only()
+    async def allies_seed(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        added, skipped = 0, 0
+        for pseudo in ALLIES_SEED:
+            if await db.ally_add(pseudo):
+                added += 1
+            else:
+                skipped += 1
+        log.info("Seed alliés : %d ajoutés, %d skippés (par %s)", added, skipped, interaction.user)
+        await interaction.followup.send(
+            embed=discord.Embed(
+                title="🌱 Seed alliés terminé",
+                description=f"✅ **{added}** allié(s) ajouté(s)\n⏭️ **{skipped}** déjà présent(s)",
+                color=discord.Color.green(),
+            ),
+            ephemeral=True,
+        )
 
 
 async def setup(bot: commands.Bot) -> None:
