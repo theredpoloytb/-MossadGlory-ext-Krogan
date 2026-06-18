@@ -70,14 +70,14 @@ class AntiDetectorCog(commands.Cog, name="AntiDetector"):
 
     async def cog_load(self) -> None:
         self._cleanup.start()
-        await self._restore_allies_online()
+        self._restore_task.start()
         log.info("AntiDetector démarré (fenêtre %ds, trigger = 2 alliés co)", ANTI_WINDOW)
 
     async def _restore_allies_online(self) -> None:
         """
-        Au démarrage, compare la liste d'alliés en DB avec les joueurs
-        actuellement en ligne sur le serveur NationsGlory pour reconstruire
-        _allies_online sans attendre le prochain tick du scanner.
+        Compare la liste d'alliés en DB avec les joueurs actuellement en ligne
+        pour reconstruire _allies_online au démarrage.
+        Exécuté après wait_until_ready via _restore_task.
         """
         import aiohttp
         from bot.utils import ng_api
@@ -99,12 +99,22 @@ class AntiDetectorCog(commands.Cog, name="AntiDetector"):
 
     async def cog_unload(self) -> None:
         self._cleanup.cancel()
+        self._restore_task.cancel()
+
+    # ─── Restauration au démarrage (après bot ready) ──────────────────────────
+
+    @tasks.loop(count=1)
+    async def _restore_task(self) -> None:
+        await self._restore_allies_online()
+
+    @_restore_task.before_loop
+    async def _before_restore(self) -> None:
+        await self.bot.wait_until_ready()
 
     # ─── Nettoyage périodique ─────────────────────────────────────────────────
 
     @tasks.loop(minutes=5)
     async def _cleanup(self) -> None:
-        # Si la fenêtre danger est expirée, on la reset
         if self._danger_since and time.time() - self._danger_since > ANTI_WINDOW:
             self._danger_since = None
             log.debug("[Anti] Fenêtre danger expirée, reset")
@@ -116,10 +126,6 @@ class AntiDetectorCog(commands.Cog, name="AntiDetector"):
     # ─── Hooks appelés par scanner.py ─────────────────────────────────────────
 
     async def on_ally_connect(self, pseudo: str) -> None:
-        """
-        Appelé par scanner.py quand un allié se connecte.
-        Si ça fait passer le total à 2+, on ouvre la fenêtre danger.
-        """
         self._allies_online.add(pseudo.lower())
         count = len(self._allies_online)
         log.info("[Anti] Allié connecté : %s (total alliés online : %d)", pseudo, count)
@@ -129,10 +135,6 @@ class AntiDetectorCog(commands.Cog, name="AntiDetector"):
             log.info("[Anti] ⚠️ 2 alliés connectés → fenêtre danger ouverte")
 
     async def on_ally_disconnect(self, pseudo: str) -> None:
-        """
-        Appelé par scanner.py quand un allié se déconnecte.
-        Si on tombe sous 2 alliés, on ferme la fenêtre danger.
-        """
         self._allies_online.discard(pseudo.lower())
         count = len(self._allies_online)
         log.info("[Anti] Allié déconnecté : %s (total alliés online : %d)", pseudo, count)
@@ -142,21 +144,15 @@ class AntiDetectorCog(commands.Cog, name="AntiDetector"):
             log.info("[Anti] Moins de 2 alliés → fenêtre danger fermée")
 
     async def on_sword_disconnect(self, pseudo: str) -> None:
-        """
-        Appelé par scanner.py quand un sword (watchlist) se déconnecte.
-        Si la fenêtre danger est active → alerte anti.
-        """
         now = time.time()
 
         if self._danger_since is None:
-            return  # Pas de danger actif, rien à signaler
+            return
 
         if now - self._danger_since > ANTI_WINDOW:
-            # Fenêtre expirée
             self._danger_since = None
             return
 
-        # Cooldown par sword
         last_alert = self._alert_cooldown.get(pseudo.lower(), 0)
         if now - last_alert < ALERT_COOLDOWN:
             log.debug("[Anti] Cooldown actif pour sword %s", pseudo)
